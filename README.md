@@ -1,12 +1,19 @@
-# Crypto Market Pulse — paper-trading prototype
+# Crypto Market Pulse — dashboard upgrade
 
-Separate Streamlit app from Global Market Pulse. Uses public CoinGecko spot prices and Kraken 15-minute candles. No API keys needed for market data. Does not run continuously, does not place exchange orders, and does not send push alerts.
+## What's new
+- New crypto hero banner and mobile-friendly dark styling.
+- Coinbase Advanced Intro spot fee assumptions: 0.09% maker / 0.10% taker, based on account screenshots.
+- Compare simulated fees with CoinSpot Markets (0.10%) and CoinSpot Instant (1.00%).
+- USD-first paper order inputs with AUD equivalents and editable slippage assumption.
+- Fee estimates automatically included in simulated buy/sell orders and simulated stop/target exits.
 
-## Deploy
-1. Create a **new private GitHub repository**, e.g. `crypto-market-pulse`.
-2. Upload `app.py` and `requirements.txt`.
-3. Create a new app in Streamlit Community Cloud, pointing to `app.py` in the new repository.
-4. In the Streamlit app settings > Secrets, add `SCANNER_PASSWORD = "choose-a-strong-private-password"`.
-5. Open your new crypto app and scan. Keep the existing stocks app untouched.
+## Deployment
+Replace the files in the **crypto-market-pulse** GitHub repository only:
+`app.py`, `README.md`, `requirements.txt`, and add `crypto_banner.jpg`.
+Keep your existing Streamlit `SCANNER_PASSWORD` secret. Streamlit should redeploy from `main`.
 
-Paper fills and stop plans are stored in a local SQLite database that may be wiped by free hosting. Back up trades with CSV. This is a prototype and has not been live integration tested against the public endpoints.
+## Limitations
+Paper trading only. No exchange orders, background monitoring, alerts or automatic overnight exits.
+Market data remains CoinGecko public spot quotes (60-second cache) and Kraken 15-minute candles.
+CoinMarketCap and Coinbase live market APIs are NOT connected. Exchange fees are assumptions and may change.
+The SQLite paper ledger on free hosting is not durable: export CSV backups regularly.

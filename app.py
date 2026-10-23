@@ -3,11 +3,17 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import streamlit as st
+from pathlib import Path
 
 st.set_page_config(page_title='Crypto Market Pulse', page_icon='₿', layout='wide', initial_sidebar_state='collapsed')
 st.markdown('''<style>
 .stApp{background:linear-gradient(155deg,#102941 0%,#071321 52%,#0b1423 100%);color:#eef4fc}
-.block-container{padding-top:2.8rem;max-width:1000px}
+.block-container{padding-top:1.1rem;max-width:1150px}
+.stTabs [data-baseweb="tab"]{font-weight:750}
+[data-testid="stMetricValue"]{color:#f8fbff}
+[data-testid="stMetric"]{background:linear-gradient(130deg,#102941,#101a2c);border:1px solid #345676;border-radius:15px}
+.stApp button{border-radius:10px}
+@media(max-width:640px){.block-container{padding-left:0.85rem;padding-right:0.85rem}.hero{padding:14px}}
 .hero{background:linear-gradient(105deg,#102c47,#10213b 55%,#57300f);padding:22px;border:1px solid #3d5972;border-radius:17px;margin-bottom:20px}
 .hero h1{color:#ffc15e;font-size:clamp(27px,6vw,48px);margin:0}
 .hero p{color:#c3d5e6;margin:8px 0 0}
@@ -35,6 +41,9 @@ COINS={
  'LINK':('Chainlink','LINKUSD','chainlink'),'AVAX':('Avalanche','AVAXUSD','avalanche-2'),
  'SUI':('Sui','SUIUSD','sui'),'HBAR':('Hedera','HBARUSD','hedera-hashgraph')}
 DB=os.getenv('DB_PATH','crypto_paper.sqlite3')
+EXCHANGES={'Coinbase Advanced':{'maker':0.0009,'taker':0.0010},'CoinSpot Markets':{'maker':0.001,'taker':0.001},'CoinSpot Instant':{'maker':0.01,'taker':0.01}}
+# Indicative fee rates only; compare order preview and actual exchange prices before any real trading.
+
 
 def connect():
  c=sqlite3.connect(DB,timeout=15)
@@ -94,11 +103,14 @@ def indicators(symbol,price):
  return {'symbol':symbol,'price':price,'score':score,'rsi':rsi,'vol':vol,'entry':entry,'stop':stop,'target':target,'last':str(d.ts.iloc[-1]),'breakout':price>resistance}
 
 def fmt(x):return f'{x:,.2f}' if x>=1 else f'{x:,.5f}'
+def dual(x,fx):return f'US${fmt(x)} (A${fmt(x*fx)})'
+def fee_usd(notional_usd,exchange,order_type):return notional_usd*EXCHANGES[exchange][order_type.lower()]
+
 
 def save_fill(sym,side,qty,price,fx,fee,note):
  with connect() as c:c.execute('INSERT INTO fills(ts,symbol,side,qty,price,fx,fee_aud,note) VALUES(?,?,?,?,?,?,?,?)',(datetime.now(timezone.utc).isoformat(),sym,side,qty,price,fx,fee,note))
 
-def check_plans(fx,fee):
+def check_plans(fx,exchange,slippage_pct):
  msgs=[];pos=positions()
  with connect() as c:plans=c.execute("SELECT symbol,stop,target,checked FROM plans WHERE state='ACTIVE'").fetchall()
  for sym,stop,target,checked in plans:
@@ -117,7 +129,9 @@ def check_plans(fx,fee):
     if r.high>=target:triggered=('TARGET',target if r.open<target else float(r.open));break
    if triggered:
     kind,px=triggered;qty=pos[sym]
-    save_fill(sym,'SELL',qty,px,fx,fee,f'Paper {kind} (15m historical candle simulation)')
+    px=px*(1-slippage_pct/100)
+    fee=fee_usd(qty*px,exchange,'taker')*fx
+    save_fill(sym,'SELL',qty,px,fx,fee,f'Paper {kind}; {exchange} taker; {slippage_pct:.2f}% slippage (15m historical candle simulation)')
     with connect() as c:c.execute("UPDATE plans SET state='CLOSED',checked=? WHERE symbol=?",(datetime.now(timezone.utc).isoformat(),sym))
     msgs.append(f'{sym}: PAPER {kind} — simulated exit {qty:.6g} at US${fmt(px)}. Not a real order.')
    else:
@@ -126,7 +140,11 @@ def check_plans(fx,fee):
   except Exception as e:msgs.append(f'{sym}: Could not check — {e}. No exit recorded.')
  return msgs
 
-st.markdown('<div class="hero"><h1>₿ CRYPTO MARKET PULSE</h1><p>24/7 crypto opportunities • Momentum scanner • Paper trading • USD + AUD</p></div>',unsafe_allow_html=True)
+banner=Path(__file__).parent/'crypto_banner.jpg'
+if banner.exists():
+ st.image(str(banner),use_container_width=True)
+else:
+ st.markdown('<div class="hero"><h1>₿ CRYPTO MARKET PULSE</h1><p>24/7 crypto opportunities • Momentum scanner • Paper trading • USD + AUD</p></div>',unsafe_allow_html=True)
 st.caption('PAPER TRADING ONLY • No exchange connection • No background monitoring • Quotes and data can be delayed')
 try:
  prices=spot();btc=prices['bitcoin'];fx=btc['aud']/btc['usd']
@@ -141,6 +159,13 @@ cols[1].metric('Open coins',len(positions()))
 cols[2].metric('Trades recorded',len(get_fills()))
 st.caption(f'Indicative conversion: US$1 ≈ A${fx:.4f} (derived from BTC spot quotes, not a bank FX rate).')
 st.info('👋 New to trading? Start with **Scan crypto**, open a result and read its explanation. You can practise with part of your A$500 — no real crypto is bought.')
+st.subheader('⚙️ Trading assumptions')
+a,b,c=st.columns(3)
+with a: exchange=st.selectbox('Fee schedule',list(EXCHANGES),index=0)
+with b: order_type=st.selectbox('Paper order type',['Taker','Maker'],index=0,help='Taker executes immediately; maker rests on the order book. Stop exits always model taker fees.')
+with c: slippage_pct=st.number_input('Estimated slippage (%)',min_value=0.0,max_value=5.0,value=0.10,step=0.05)
+st.caption(f'{exchange}: maker {EXCHANGES[exchange]["maker"]*100:.2f}% · taker {EXCHANGES[exchange]["taker"]*100:.2f}%. Indicative fees; not connected to the exchange. Paper trades use displayed spot quotes, not exchange execution prices.')
+
 scan_tab,trade_tab,learn_tab=st.tabs(['🎯 Scan crypto','💼 Paper trading','❓ How it works'])
 with scan_tab:
  st.subheader('① Find possible crypto trades')
@@ -169,11 +194,15 @@ with scan_tab:
     st.write(f"**Illustrative buy level:** US${fmt(r['entry'])} (A${fmt(r['entry']*fx)})")
     st.write(f"**Illustrative stop:** US${fmt(r['stop'])} (A${fmt(r['stop']*fx)})")
     st.write(f"**Illustrative profit target:** US${fmt(r['target'])} (A${fmt(r['target']*fx)})")
-    st.caption('Target is a mathematical 2:1 illustration, NOT a validated reachable price. Fees, spreads and slippage are excluded from this setup.')
+    risk=r['entry']-r['stop']
+    notional=100.0
+    roundtrip=fee_usd(notional,exchange,order_type)+fee_usd(notional,exchange,'taker')+2*notional*slippage_pct/100
+    st.caption(f'Example US$100 round-trip estimated trading fees + slippage: US${roundtrip:.2f} (A${roundtrip*fx:.2f}), excluding spread and price movement.')
+    st.caption('Target is a mathematical 2:1 illustration, NOT a validated reachable price. Quotes can differ between providers.')
     st.caption(f"Last completed candle started {r['last']} UTC. Kraken historical candles and CoinGecko spot may differ.")
     st.link_button('📈 Open TradingView chart',f'https://www.tradingview.com/chart/?symbol=KRAKEN%3A{COINS[sym][1]}')
  st.divider()
- st.subheader('Quick price board')
+ st.subheader('🌐 Global crypto price board')
  board=[]
  for sym,(name,pair,cid) in COINS.items():
   if cid in prices:
@@ -182,20 +211,24 @@ with scan_tab:
  if st.button('🔄 Refresh spot prices'):st.cache_data.clear();st.rerun()
 
 with trade_tab:
- st.subheader('② Your practice account')
+ st.subheader('② Your practice account — USD first')
  st.warning('Stops and targets are checked **only when you press the button below**. This is NOT automatic overnight protection. No real exchange orders are sent.')
- st.write('You can use A$20, A$50 or A$100 for a trade — you do not need to spend the whole A$500.')
+ st.write('Your starting balance is A$500, shown alongside its USD equivalent. You do not need to use the whole balance.')
  with st.form('paper_buy'):
   sym=st.selectbox('Coin',list(COINS))
   side=st.radio('Action',['BUY','SELL'],horizontal=True)
-  amount=st.number_input('Amount to spend (BUY) or receive before fees (SELL), AUD',min_value=1.,value=50.,step=10.)
-  fee=st.number_input('Simulated exchange fee (AUD)',min_value=0.,value=0.20,step=0.05)
+  amount=st.number_input('Trade value (USD, before fees)',min_value=1.,value=25.,step=10.)
+  st.caption(f'US${amount:,.2f} (A${amount*fx:,.2f}) before fees. Exchange: {exchange}, {order_type.lower()} order.')
   note=st.text_input('Reason for trade',value='Learning exercise')
   submitted=st.form_submit_button('Save paper trade',type='primary')
  if submitted:
-  px=float(prices[COINS[sym][2]]['usd']);qty=amount/(px*fx)
+  px=float(prices[COINS[sym][2]]['usd']);qty=amount/px
+  fee=fee_usd(amount,exchange,order_type)*fx
+  # Conservative paper slippage: pay more to buy and receive less to sell.
+  px=px*(1+slippage_pct/100 if side=='BUY' else 1-slippage_pct/100)
+  qty=amount/px
   available=positions().get(sym,0)
-  if side=='BUY' and cash<amount+fee:st.error('Not enough paper cash.')
+  if side=='BUY' and cash<amount*fx+fee:st.error('Not enough paper cash.')
   elif side=='SELL' and qty>available+1e-8:st.error(f'You only own {available:.8f} paper {sym}.')
   else:
    save_fill(sym,side,qty,px,fx,fee,note);st.success(f'Simulated {side}: {qty:.7f} {sym} at US${fmt(px)} (A${fmt(px*fx)}).');st.rerun()
@@ -217,7 +250,7 @@ with trade_tab:
     st.success('Practice stop/target saved. Remember: it will NOT run until you check.')
  else:st.info('Make a paper BUY first to set a stop and target.')
  if st.button('🔄 CHECK MY PAPER STOPS AND TARGETS NOW',use_container_width=True):
-  for msg in check_plans(fx,0.20):st.info(msg)
+  for msg in check_plans(fx,exchange,slippage_pct):st.info(msg)
   st.caption('After an exit, refresh the page to see the updated cash and positions.')
  with connect() as c:plans=pd.read_sql_query('SELECT * FROM plans',c)
  if not plans.empty:st.dataframe(plans,hide_index=True,use_container_width=True)
@@ -228,7 +261,7 @@ with trade_tab:
  else:
   st.dataframe(fills,hide_index=True,use_container_width=True)
   st.download_button('⬇️ Back up trades (CSV)',fills.to_csv(index=False).encode(),'crypto_paper_trades.csv','text/csv')
-  st.caption('Streamlit free hosting can reset this database. Download your CSV regularly; this version does not restore CSV automatically.')
+  st.caption('Streamlit free hosting can reset this database. Download your CSV regularly; this version does not restore CSV automatically. Changing exchange fee assumptions does not retroactively alter recorded trades.')
 
 with learn_tab:
  st.subheader('Beginner guide')
@@ -238,3 +271,5 @@ with learn_tab:
  st.write('**Paper trade**: A pretend transaction that changes only your practice account.')
  st.write('**Important**: Crypto trades around the clock, but this Streamlit app does not. An always-on worker, reliable exchange market data, persistent database and alert service are needed before unattended paper trading can be trusted.')
  st.write('**Safety**: This version is spot-only practice, no leverage, no wallet connections, no exchange API keys, no real orders.')
+ st.write('**Coinbase**: Coinbase Advanced Intro spot fee assumptions are maker 0.09%, taker 0.10%, based on your fee-tier screenshots. Always verify rates in Coinbase before real trading.')
+ st.write('**Market data**: This version uses CoinGecko spot prices (cached 60 seconds) and Kraken historical 15-minute candles. CoinMarketCap API and Coinbase exchange feeds are not connected yet; instant prices and unattended trading are NOT available.')
