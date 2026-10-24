@@ -46,6 +46,32 @@ EXCHANGES={'Coinbase Advanced':{'maker':0.0009,'taker':0.0010},'CoinSpot Markets
 # Indicative fee rates only; compare order preview and actual exchange prices before any real trading.
 
 
+def secret(name):
+ try:return str(st.secrets.get(name,'')).strip()
+ except Exception:return ''
+
+def telegram_send(message):
+ token=secret('TELEGRAM_BOT_TOKEN')
+ chat=secret('TELEGRAM_CHAT_ID')
+ if not token or not chat:return False,'Telegram is not configured in Streamlit secrets.'
+ try:
+  r=requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
+                  json={'chat_id':chat,'text':message,'disable_web_page_preview':True},timeout=10)
+  payload=r.json()
+  if r.ok and payload.get('ok'):return True,'Message sent to Telegram.'
+  return False,f"Telegram rejected the message (HTTP {r.status_code}): {str(payload.get('description','Unknown error'))[:120]}"
+ except Exception as e:return False,f'Telegram request failed: {type(e).__name__}'
+
+def alert_once(key,message):
+ # Persistent only as long as Streamlit's local SQLite file survives.
+ with connect() as c:
+  c.execute('CREATE TABLE IF NOT EXISTS telegram_alerts(key TEXT PRIMARY KEY, sent_at TEXT)')
+  if c.execute('SELECT 1 FROM telegram_alerts WHERE key=?',(key,)).fetchone():
+   return False,'Already notified for this candle.'
+  ok,msg=telegram_send(message)
+  if ok:c.execute('INSERT INTO telegram_alerts(key,sent_at) VALUES(?,?)',(key,datetime.now(timezone.utc).isoformat()))
+  return ok,msg
+
 def connect():
  c=sqlite3.connect(DB,timeout=15)
  c.execute('CREATE TABLE IF NOT EXISTS fills(id INTEGER PRIMARY KEY AUTOINCREMENT,ts TEXT,symbol TEXT,side TEXT,qty REAL,price REAL,fx REAL,fee_aud REAL,note TEXT)')
@@ -142,28 +168,10 @@ def check_plans(fx,exchange,slippage_pct):
   except Exception as e:msgs.append(f'{sym}: Could not check — {e}. No exit recorded.')
  return msgs
 
-# Display a compact mobile banner and the original full-height artwork on desktop.
-# Streamlit serves local static images reliably with st.image; no remote URL required.
+# Functional dashboard: only the decorative header image is shown, never a fake dashboard screenshot.
 banner=Path(__file__).parent/'crypto_banner.jpg'
-desktop_art=Path(__file__).parent/'crypto_desktop_art.png'
-st.markdown('''<style>
-@media(min-width:850px){
-  .block-container{max-width:1300px}
-  .desktop-heading{font-size:clamp(35px,4vw,65px)!important}
-}
-</style>''',unsafe_allow_html=True)
-left,right=st.columns([1.5,1],gap='large',vertical_alignment='center')
-with left:
- st.markdown('<div class="hero"><h1 class="desktop-heading">₿ CRYPTO MARKET PULSE</h1><p>Global crypto research • Momentum scanner • Coinbase Advanced fee modelling • Paper trading • USD (AUD)</p></div>',unsafe_allow_html=True)
- if banner.exists():
-  st.image(str(banner),use_container_width=True)
- else:
-  st.caption('Crypto banner file not found; upload crypto_banner.jpg to the GitHub repository root.')
-with right:
- if desktop_art.exists():
-  st.image(str(desktop_art),use_container_width=True)
- else:
-  st.warning('Desktop artwork missing. Upload crypto_desktop_art.png alongside app.py.')
+st.markdown('<div class="hero"><h1>₿ CRYPTO MARKET PULSE</h1><p>Rebound scanner • Coinbase fee modelling • Paper trading • Telegram alerts • USD (AUD)</p></div>',unsafe_allow_html=True)
+if banner.exists():st.image(str(banner),use_container_width=True)
 st.caption('PAPER TRADING ONLY • No exchange connection • No background monitoring • Quotes and data can be delayed')
 try:
  prices=spot();btc=prices['bitcoin'];fx=btc['aud']/btc['usd']
@@ -185,6 +193,17 @@ with b: order_type=st.selectbox('Paper order type',['Taker','Maker'],index=0,hel
 with c: slippage_pct=st.number_input('Estimated slippage (%)',min_value=0.0,max_value=5.0,value=0.10,step=0.05)
 st.caption(f'{exchange}: maker {EXCHANGES[exchange]["maker"]*100:.2f}% · taker {EXCHANGES[exchange]["taker"]*100:.2f}%. Indicative fees; not connected to the exchange. Paper trades use displayed spot quotes, not exchange execution prices.')
 
+with st.expander('📨 Telegram alert setup and test'):
+ st.write('Telegram alerts are sent only when you run a scan or paper-trade action. The Streamlit app does NOT monitor markets in the background.')
+ if secret('TELEGRAM_BOT_TOKEN') and secret('TELEGRAM_CHAT_ID'):
+  st.success('Telegram credentials detected in Streamlit secrets.')
+  if st.button('📨 Send test Telegram alert'):
+   ok,msg=telegram_send('🧪 Crypto Market Pulse: Telegram connection working. Paper mode only.')
+   (st.success if ok else st.error)(msg)
+ else:
+  st.warning('Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your crypto app Streamlit secrets. Never put the bot token in GitHub.')
+ st.caption('A green research candidate (score 4/4) triggers a Telegram message when you press SCAN. Repeat scans of the same completed candle are deduplicated.')
+
 scan_tab,trade_tab,learn_tab=st.tabs(['🎯 Scan crypto','💼 Paper trading','❓ How it works'])
 with scan_tab:
  st.subheader('① Find possible crypto trades')
@@ -202,6 +221,20 @@ with scan_tab:
     except Exception as e:errors.append(f'{sym}: {str(e)[:120]}')
   st.session_state.crypto_results=sorted(results,key=lambda r:(r['score'],r['vol']),reverse=True)
   st.session_state.crypto_errors=errors
+  sent=0;alert_errors=[]
+  for r in st.session_state.crypto_results:
+   if r['score']==4:
+    sym=r['symbol']
+    message=(f'🟢 Crypto Market Pulse: {sym} research candidate (4/4)\\n'
+             f'Price US${fmt(r["price"])} (A${fmt(r["price"]*fx)})\\n'
+             f'RSI {r["rsi"]:.1f} • volume {r["vol"]:.2f}x\\n'
+             f'Illustrative entry US${fmt(r["entry"])} • stop US${fmt(r["stop"])} • target US${fmt(r["target"])}\\n'
+             'Paper research signal only. Not a guaranteed rebound or live order.')
+    ok,msg=alert_once(f'signal:{sym}:{r["last"]}',message)
+    if ok:sent+=1
+    elif 'Already notified' not in msg:alert_errors.append(f'{sym}: {msg}')
+  if sent:st.success(f'📨 Sent {sent} Telegram signal alert(s).')
+  for err in alert_errors:st.warning(err)
  if 'crypto_results' in st.session_state:
   st.subheader('🤖 One-click automatic paper selection')
   st.caption('Selects the highest-ranked qualifying coin and simulates a BUY with a stop and target. Runs only when pressed — not unattended.')
@@ -224,6 +257,9 @@ with scan_tab:
       save_fill(sym,'BUY',qty,fillpx,fx,fee,'One-click ranked paper candidate; NOT live')
       with connect() as c:c.execute('INSERT OR REPLACE INTO plans(symbol,stop,target,checked,state) VALUES(?,?,?,?,?)',(sym,stop,target,datetime.now(timezone.utc).isoformat(),'ACTIVE'))
       st.success(f'PAPER BUY {sym}: {qty:.7f} units at {dual(fillpx,fx)}. Stop {dual(stop,fx)}; target {dual(target,fx)}. Exits are NOT continuously monitored.')
+      ok,msg=telegram_send(f'🧪 PAPER BUY {sym}: {qty:.7f} at US${fmt(fillpx)}. Stop US${fmt(stop)}; target US${fmt(target)}. Not a real order.')
+      if not ok:st.warning(f'Telegram: {msg}')
+
       st.rerun()
   candidates=[r for r in st.session_state.crypto_results if r['score']==4]
   st.subheader('🏆 Ranked trade candidates')
