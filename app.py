@@ -39,7 +39,8 @@ COINS={
  'SOL':('Solana','SOLUSD','solana'),'XRP':('XRP','XRPUSD','ripple'),
  'DOGE':('Dogecoin','XDGUSD','dogecoin'),'ADA':('Cardano','ADAUSD','cardano'),
  'LINK':('Chainlink','LINKUSD','chainlink'),'AVAX':('Avalanche','AVAXUSD','avalanche-2'),
- 'SUI':('Sui','SUIUSD','sui'),'HBAR':('Hedera','HBARUSD','hedera-hashgraph')}
+ 'SUI':('Sui','SUIUSD','sui'),'HBAR':('Hedera','HBARUSD','hedera-hashgraph'),
+ 'HYPE':('Hyperliquid',None,'hyperliquid'),'ZEC':('Zcash','XZECZUSD','zcash')}
 DB=os.getenv('DB_PATH','crypto_paper.sqlite3')
 EXCHANGES={'Coinbase Advanced':{'maker':0.0009,'taker':0.0010},'CoinSpot Markets':{'maker':0.001,'taker':0.001},'CoinSpot Instant':{'maker':0.01,'taker':0.01}}
 # Indicative fee rates only; compare order preview and actual exchange prices before any real trading.
@@ -76,6 +77,7 @@ def spot():
 @st.cache_data(ttl=120,show_spinner=False)
 def candles(symbol,interval=15):
  pair=COINS[symbol][1]
+ if pair is None: raise ValueError('No verified Kraken candle pair; HYPE remains price-watch only until a compatible candle feed is connected')
  resp=requests.get('https://api.kraken.com/0/public/OHLC',params={'pair':pair,'interval':interval},timeout=12)
  resp.raise_for_status();payload=resp.json()
  if payload.get('error'):raise ValueError('; '.join(payload['error']))
@@ -170,7 +172,7 @@ scan_tab,trade_tab,learn_tab=st.tabs(['🎯 Scan crypto','💼 Paper trading','�
 with scan_tab:
  st.subheader('① Find possible crypto trades')
  st.write('Checks a small list of established coins for upward momentum, increased trading activity and a recent price breakout. This is **not** a prediction or a verified news signal.')
- selected=st.multiselect('Coins to scan',list(COINS),default=['BTC','ETH','SOL','XRP','DOGE','SUI','HBAR'])
+ selected=st.multiselect('Coins to scan',list(COINS),default=['BTC','ETH','SOL','XRP','DOGE','SUI','HBAR','HYPE','ZEC'])
  if st.button('🚀 SCAN CRYPTO FOR ME',type='primary',use_container_width=True):
   results=[];errors=[]
   with st.spinner('Checking completed 15-minute candles…'):
@@ -184,6 +186,36 @@ with scan_tab:
   st.session_state.crypto_results=sorted(results,key=lambda r:(r['score'],r['vol']),reverse=True)
   st.session_state.crypto_errors=errors
  if 'crypto_results' in st.session_state:
+  st.subheader('🤖 One-click automatic paper selection')
+  st.caption('Selects the highest-ranked qualifying coin and simulates a BUY with a stop and target. Runs only when pressed — not unattended.')
+  paper_budget=st.number_input('Automatic paper-trade budget (USD)',min_value=5.,max_value=100.,value=25.,step=5.,key='auto_budget')
+  if st.button('🤖 SELECT BEST & PAPER TRADE',type='primary',use_container_width=True):
+   eligible=[r for r in st.session_state.crypto_results if r['score']==4 and r['symbol'] not in positions()]
+   if not eligible:st.warning('NO TRADE: No new coin passed all four technical checks.')
+   else:
+    best=eligible[0];sym=best['symbol'];age=time.time()-prices[COINS[sym][2]].get('last_updated_at',0)
+    px=float(prices[COINS[sym][2]]['usd'])
+    if age>300:st.error('Quote is stale. Refresh and scan again.')
+    elif cash < paper_budget*fx*(1+EXCHANGES[exchange]['taker']):st.error('Not enough paper cash.')
+    else:
+     fillpx=px*(1+slippage_pct/100)
+     qty=paper_budget/fillpx
+     fee=fee_usd(paper_budget,exchange,'taker')*fx
+     stop=best['stop'];target=best['target']
+     if not (0<stop<fillpx<target):st.warning('NO TRADE: The planned stop/target is no longer valid at the current quote.')
+     else:
+      save_fill(sym,'BUY',qty,fillpx,fx,fee,'One-click ranked paper candidate; NOT live')
+      with connect() as c:c.execute('INSERT OR REPLACE INTO plans(symbol,stop,target,checked,state) VALUES(?,?,?,?,?)',(sym,stop,target,datetime.now(timezone.utc).isoformat(),'ACTIVE'))
+      st.success(f'PAPER BUY {sym}: {qty:.7f} units at {dual(fillpx,fx)}. Stop {dual(stop,fx)}; target {dual(target,fx)}. Exits are NOT continuously monitored.')
+      st.rerun()
+  candidates=[r for r in st.session_state.crypto_results if r['score']==4]
+  st.subheader('🏆 Ranked trade candidates')
+  if candidates:
+   best=candidates[0]
+   st.success(f"Top research candidate: {best['symbol']} — score {best['score']}/4, volume {best['vol']:.2f}×. This is NOT an instruction to buy.")
+   st.caption('The scanner ranks only selected coins. A score is a basic chart filter, not a proven profitable strategy.')
+  else:
+   st.warning('NO TRADE: None of the selected coins meets all four momentum rules. Waiting is a valid decision.')
   for err in st.session_state.get('crypto_errors',[]):st.warning(err)
   for r in st.session_state.crypto_results:
    sym=r['symbol'];label='🟢 Research candidate' if r['score']==4 else '🟠 Watch' if r['score']>=2 else '🔴 Weak setup'
@@ -200,7 +232,7 @@ with scan_tab:
     st.caption(f'Example US$100 round-trip estimated trading fees + slippage: US${roundtrip:.2f} (A${roundtrip*fx:.2f}), excluding spread and price movement.')
     st.caption('Target is a mathematical 2:1 illustration, NOT a validated reachable price. Quotes can differ between providers.')
     st.caption(f"Last completed candle started {r['last']} UTC. Kraken historical candles and CoinGecko spot may differ.")
-    st.link_button('📈 Open TradingView chart',f'https://www.tradingview.com/chart/?symbol=KRAKEN%3A{COINS[sym][1]}')
+    if COINS[sym][1]:st.link_button('📈 Open TradingView chart',f'https://www.tradingview.com/chart/?symbol=KRAKEN%3A{COINS[sym][1]}')
  st.divider()
  st.subheader('🌐 Global crypto price board')
  board=[]
@@ -271,5 +303,6 @@ with learn_tab:
  st.write('**Paper trade**: A pretend transaction that changes only your practice account.')
  st.write('**Important**: Crypto trades around the clock, but this Streamlit app does not. An always-on worker, reliable exchange market data, persistent database and alert service are needed before unattended paper trading can be trusted.')
  st.write('**Safety**: This version is spot-only practice, no leverage, no wallet connections, no exchange API keys, no real orders.')
+ st.write('**HYPE and ZEC**: Added to the price board and scan selection. HYPE technical signals require a compatible verified candle feed; Coinbase Australia spot availability must be confirmed before live trading. ZEC candle data may also be unavailable depending on Kraken product support.')
  st.write('**Coinbase**: Coinbase Advanced Intro spot fee assumptions are maker 0.09%, taker 0.10%, based on your fee-tier screenshots. Always verify rates in Coinbase before real trading.')
  st.write('**Market data**: This version uses CoinGecko spot prices (cached 60 seconds) and Kraken historical 15-minute candles. CoinMarketCap API and Coinbase exchange feeds are not connected yet; instant prices and unattended trading are NOT available.')

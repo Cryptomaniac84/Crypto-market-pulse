@@ -1,19 +1,21 @@
-# Crypto Market Pulse — dashboard upgrade
+# Crypto Market Pulse — next-stage upgrade
 
-## What's new
-- New crypto hero banner and mobile-friendly dark styling.
-- Coinbase Advanced Intro spot fee assumptions: 0.09% maker / 0.10% taker, based on account screenshots.
-- Compare simulated fees with CoinSpot Markets (0.10%) and CoinSpot Instant (1.00%).
-- USD-first paper order inputs with AUD equivalents and editable slippage assumption.
-- Fee estimates automatically included in simulated buy/sell orders and simulated stop/target exits.
+Changes:
+- Adds HYPE (Hyperliquid) and ZEC (Zcash) to the default watchlist and price board.
+- Keeps the existing neon crypto banner and USD-first prices with AUD equivalents.
+- Ranks technical research candidates; explicitly says NO TRADE when none meets all 4 conditions.
+- Adds a one-click paper-trade selector: highest-ranked eligible coin, $25 USD default, configurable $5-$100, records estimated Coinbase/other exchange fees and slippage, attaches a simulated stop and target.
+- Uses Coinbase Advanced Intro assumptions: maker 0.09%, taker 0.10%.
 
-## Deployment
-Replace the files in the **crypto-market-pulse** GitHub repository only:
-`app.py`, `README.md`, `requirements.txt`, and add `crypto_banner.jpg`.
-Keep your existing Streamlit `SCANNER_PASSWORD` secret. Streamlit should redeploy from `main`.
+IMPORTANT:
+- The one-click feature is PAPER TRADING ONLY and requires a button press.
+- Simulated stops and targets DO NOT execute automatically while the app is unattended.
+- No Coinbase API keys, real orders, continuous monitoring or alerts.
+- HYPE price display works through CoinGecko if its API responds, but HYPE technical scoring needs a verified candle feed and may show a warning.
+- ZEC technical scoring depends on Kraken OHLC support.
+- Coinbase Australia spot trading availability for HYPE/ZEC is NOT verified.
+- Data is CoinGecko + Kraken; CoinMarketCap is not connected.
+- The free Streamlit instance can lose its local SQLite paper ledger on redeployment/restart. Export CSV frequently.
 
-## Limitations
-Paper trading only. No exchange orders, background monitoring, alerts or automatic overnight exits.
-Market data remains CoinGecko public spot quotes (60-second cache) and Kraken 15-minute candles.
-CoinMarketCap and Coinbase live market APIs are NOT connected. Exchange fees are assumptions and may change.
-The SQLite paper ledger on free hosting is not durable: export CSV backups regularly.
+Install:
+Upload app.py, README.md, requirements.txt, crypto_banner.jpg to the ROOT of the existing GitHub crypto-market-pulse repository; commit to main. Do NOT touch the stock scanner repository.
