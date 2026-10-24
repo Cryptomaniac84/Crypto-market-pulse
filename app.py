@@ -142,11 +142,28 @@ def check_plans(fx,exchange,slippage_pct):
   except Exception as e:msgs.append(f'{sym}: Could not check — {e}. No exit recorded.')
  return msgs
 
+# Display a compact mobile banner and the original full-height artwork on desktop.
+# Streamlit serves local static images reliably with st.image; no remote URL required.
 banner=Path(__file__).parent/'crypto_banner.jpg'
-if banner.exists():
- st.image(str(banner),use_container_width=True)
-else:
- st.markdown('<div class="hero"><h1>₿ CRYPTO MARKET PULSE</h1><p>24/7 crypto opportunities • Momentum scanner • Paper trading • USD + AUD</p></div>',unsafe_allow_html=True)
+desktop_art=Path(__file__).parent/'crypto_desktop_art.png'
+st.markdown('''<style>
+@media(min-width:850px){
+  .block-container{max-width:1300px}
+  .desktop-heading{font-size:clamp(35px,4vw,65px)!important}
+}
+</style>''',unsafe_allow_html=True)
+left,right=st.columns([1.5,1],gap='large',vertical_alignment='center')
+with left:
+ st.markdown('<div class="hero"><h1 class="desktop-heading">₿ CRYPTO MARKET PULSE</h1><p>Global crypto research • Momentum scanner • Coinbase Advanced fee modelling • Paper trading • USD (AUD)</p></div>',unsafe_allow_html=True)
+ if banner.exists():
+  st.image(str(banner),use_container_width=True)
+ else:
+  st.caption('Crypto banner file not found; upload crypto_banner.jpg to the GitHub repository root.')
+with right:
+ if desktop_art.exists():
+  st.image(str(desktop_art),use_container_width=True)
+ else:
+  st.warning('Desktop artwork missing. Upload crypto_desktop_art.png alongside app.py.')
 st.caption('PAPER TRADING ONLY • No exchange connection • No background monitoring • Quotes and data can be delayed')
 try:
  prices=spot();btc=prices['bitcoin'];fx=btc['aud']/btc['usd']
