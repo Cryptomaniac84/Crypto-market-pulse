@@ -26,6 +26,6 @@ jobs:
 
       - name: Run crypto scanner
         env:
-          TELEGRAM_BOT_TOKEN: $&#123;&#123; secrets.TELEGRAM_BOT_TOKEN &#125;&#125;
-          TELEGRAM_CHAT_ID: $&#123;&#123; secrets.TELEGRAM_CHAT_ID &#125;&#125;
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python auto_scanner.py
